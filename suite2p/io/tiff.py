@@ -1,5 +1,5 @@
 """
-Copright © 2023 Howard Hughes Medical Institute, Authored by Carsen Stringer and Marius Pachitariu.
+Copyright © 2023 Howard Hughes Medical Institute, Authored by Carsen Stringer and Marius Pachitariu.
 """
 import gc
 import glob
@@ -60,7 +60,7 @@ def generate_tiff_filename(functional_chan: int, align_by_chan: int, save_path: 
             wchan = 0
     if not os.path.isdir(tifroot):
         os.makedirs(tifroot)
-    fname = "file%0.3d_chan%d.tif" % (k, wchan)
+    fname = "file00%0.3d_chan%d.tif" % (k, wchan)
     fname = os.path.join(tifroot, fname)
     return fname
 
@@ -79,7 +79,7 @@ def save_tiff(mov: np.ndarray, fname: str) -> None:
     """
     with TiffWriter(fname) as tif:
         for frame in np.floor(mov).astype(np.int16):
-            tif.write(frame)
+            tif.write(frame, contiguous=True)
 
 
 def open_tiff(file: str,
