@@ -1,7 +1,7 @@
 """
 Copright © 2023 Howard Hughes Medical Institute, Authored by Carsen Stringer and Marius Pachitariu.
 """
-from typing import Tuple
+from typing import Tuple, Union
 
 import numpy as np
 
@@ -69,13 +69,17 @@ def phasecorr_reference(refImg: np.ndarray, smooth_sigma=None) -> np.ndarray:
     return cfRefImg.astype("complex64")
 
 
-def phasecorr(data, cfRefImg, maxregshift, smooth_sigma_time) -> Tuple[int, int, float]:
+def phasecorr(data: Union[np.ndarray, torch.Tensor],
+              cfRefImg: Union[np.ndarray, torch.Tensor],
+              maxregshift: float, smooth_sigma_time: float) -> Tuple[int, int, float]:
     """ compute phase correlation between data and reference image
 
     Parameters
     ----------
     data : int16
         array that"s frames x Ly x Lx
+    cfRefImg : complex64
+        fft'ed and complex conjugated reference image
     maxregshift : float
         maximum shift as a fraction of the minimum dimension of data (min(Ly,Lx) * maxregshift)
     smooth_sigma_time : float
@@ -94,11 +98,16 @@ def phasecorr(data, cfRefImg, maxregshift, smooth_sigma_time) -> Tuple[int, int,
     min_dim = np.minimum(*data.shape[1:])  # maximum registration shift allowed
     lcorr = int(np.minimum(np.round(maxregshift * min_dim), min_dim // 2))
 
-    #cc = convolve(data, cfRefImg, lcorr)
-    data = convolve(data, cfRefImg)
-    cc = np.real(
-        np.block([[data[:, -lcorr:, -lcorr:], data[:, -lcorr:, :lcorr + 1]],
-                  [data[:, :lcorr + 1, -lcorr:], data[:, :lcorr + 1, :lcorr + 1]]]))
+    if isinstance(data, torch.Tensor):
+        data = convolve(data, cfRefImg)
+        cc = torch.cat((torch.cat((data[:, -lcorr:, -lcorr:], data[:, -lcorr:, :lcorr + 1]), dim=2),
+                        torch.cat((data[:, :lcorr + 1, -lcorr:], data[:, :lcorr + 1, :lcorr + 1]), dim=2)),
+                       dim=1).cpu().numpy()
+    else:
+        data = convolve(data, cfRefImg)
+        cc = np.real(
+            np.block([[data[:, -lcorr:, -lcorr:], data[:, -lcorr:, :lcorr + 1]],
+                    [data[:, :lcorr + 1, -lcorr:], data[:, :lcorr + 1, :lcorr + 1]]]))
 
     cc = temporal_smooth(cc, smooth_sigma_time) if smooth_sigma_time > 0 else cc
 
@@ -112,7 +121,8 @@ def phasecorr(data, cfRefImg, maxregshift, smooth_sigma_time) -> Tuple[int, int,
     return ymax, xmax, cmax.astype(np.float32)
 
 
-def shift_frame(frame: np.ndarray, dy: int, dx: int) -> np.ndarray:
+def shift_frame(frame: Union[np.ndarray, torch.Tensor], dy: int, dx: int
+                ) -> Union[np.ndarray, torch.Tensor]:
     """
     Returns frame, shifted by dy and dx
 
@@ -130,4 +140,7 @@ def shift_frame(frame: np.ndarray, dy: int, dx: int) -> np.ndarray:
         The shifted frame
 
     """
-    return np.roll(frame, (-dy, -dx), axis=(0, 1))
+    if isinstance(frame, np.ndarray):
+        return np.roll(frame, (-dy, -dx), axis=(0, 1))
+    else:
+        return torch.roll(frame, (-dy, -dx), dims=(0, 1))

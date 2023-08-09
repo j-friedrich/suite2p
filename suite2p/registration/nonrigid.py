@@ -1,15 +1,14 @@
 """
 Copright © 2023 Howard Hughes Medical Institute, Authored by Carsen Stringer and Marius Pachitariu.
 """
-import warnings
-from typing import Tuple
+from typing import Tuple, Union
 
 import numpy as np
 from numba import float32, njit, prange
 from numpy import fft
-from scipy.fftpack import next_fast_len
+import torch
 
-from .utils import addmultiply, spatial_taper, gaussian_fft, kernelD2, mat_upsample, convolve
+from .utils import spatial_taper, gaussian_fft, kernelD2, mat_upsample, convolve
 
 
 def calculate_nblocks(L: int, block_size: int = 128) -> Tuple[int, int]:
@@ -157,8 +156,8 @@ def getSNR(cc: np.ndarray, lcorr: int, lpad: int) -> float:
     return snr
 
 
-def phasecorr(data: np.ndarray, maskMul, maskOffset, cfRefImg, snr_thresh, NRsm, xblock,
-              yblock, maxregshiftNR, subpixel: int = 10, lpad: int = 3):
+def phasecorr(data: Union[np.ndarray, torch.Tensor], maskMul, maskOffset, cfRefImg,
+              snr_thresh, NRsm, xblock, yblock, maxregshiftNR, subpixel: int = 10, lpad: int = 3):
     """
     Compute phase correlations for each block
     
@@ -200,27 +199,34 @@ def phasecorr(data: np.ndarray, maskMul, maskOffset, cfRefImg, snr_thresh, NRsm,
     nb = len(yblock)
 
     # shifts and corrmax
-    Y = np.zeros((nimg, nb, ly, lx), "float32")
+    if isinstance(data, torch.Tensor):
+        device = data.device.type
+    else:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        data = torch.tensor(data, device=device)
+    from_numpy = lambda x: torch.from_numpy(x) if device=='cpu' else torch.tensor(x, device=device)
+    Y = torch.zeros((nimg, nb, ly, lx), dtype=torch.float32, device=device)
     for n in range(nb):
         yind, xind = yblock[n], xblock[n]
         Y[:, n] = data[:, yind[0]:yind[-1], xind[0]:xind[-1]]
-    Y = addmultiply(Y, maskMul, maskOffset)
+    Y = Y * from_numpy(maskMul) + from_numpy(maskOffset)
     batch = min(64, Y.shape[1])  #16
     for n in np.arange(0, nb, batch):
         nend = min(Y.shape[1], n + batch)
-        Y[:, n:nend] = convolve(mov=Y[:, n:nend], img=cfRefImg[n:nend])
+        Y[:, n:nend] = convolve(mov=Y[:, n:nend], img=from_numpy(cfRefImg[n:nend]))
 
     # calculate ccsm
     lhalf = lcorr + lpad
-    cc0 = np.real(
-        np.block([[Y[:, :, -lhalf:, -lhalf:], Y[:, :, -lhalf:, :lhalf + 1]],
-                  [Y[:, :, :lhalf + 1, -lhalf:], Y[:, :, :lhalf + 1, :lhalf + 1]]]))
-    cc0 = cc0.transpose(1, 0, 2, 3)
+    cc0 = torch.cat(
+        (torch.cat((Y[:, :, -lhalf:, -lhalf:], Y[:, :, -lhalf:, :lhalf + 1]), dim=3),
+         torch.cat((Y[:, :, :lhalf + 1, -lhalf:], Y[:, :, :lhalf + 1, :lhalf + 1]), dim=3)), dim=2)
+    cc0 = cc0.transpose(1, 0)
     cc0 = cc0.reshape(cc0.shape[0], -1)
 
+    NRsm = from_numpy(NRsm.astype(np.float32))
     cc2 = [cc0, NRsm @ cc0, NRsm @ NRsm @ cc0]
     cc2 = [
-        c2.reshape(nb, nimg, 2 * lcorr + 2 * lpad + 1, 2 * lcorr + 2 * lpad + 1)
+        c2.reshape(nb, nimg, 2 * lcorr + 2 * lpad + 1, 2 * lcorr + 2 * lpad + 1).cpu().numpy()
         for c2 in cc2
     ]
     ccsm = cc2[0]

@@ -3,7 +3,7 @@ Copright © 2023 Howard Hughes Medical Institute, Authored by Carsen Stringer an
 """
 import warnings
 from functools import lru_cache
-from typing import Tuple
+from typing import Tuple, Union
 
 import numpy as np
 from numba import vectorize, complex64
@@ -63,7 +63,9 @@ except:
         data_torch = torch_ifft(data_torch, dim=-2)
         return data_torch.cpu().numpy()
 
-    def convolve(mov: np.ndarray, img: np.ndarray) -> np.ndarray:
+    def convolve(mov: Union[np.ndarray, torch.Tensor],
+                 img: Union[np.ndarray, torch.Tensor]
+                 ) -> Union[np.ndarray, torch.Tensor]:
         """
         Returns the 3D array "mov" convolved by a 2D array "img".
 
@@ -73,20 +75,21 @@ except:
             The frames to process
         img: 2D array
             The convolution kernel
-        lcorr: int (optional)
-            amount to crop cross-correlation
 
         Returns
         -------
         convolved_data: nImg x Ly x Lx
         """
-        mov_fft = torch.from_numpy(mov)
-        mov_fft = torch_fft2(mov_fft, dim=(-2, -1))
-        #mov_fft = torch_fft(torch_fft(mov_fft, dim=-1), dim=-2)
+        is_numpy = isinstance(mov, np.ndarray)
+        if is_numpy:
+            mov = torch.from_numpy(mov)
+        if isinstance(img, np.ndarray):
+            img = torch.from_numpy(img)
+        mov_fft = torch_fft2(mov, dim=(-2, -1))
         mov_fft /= (eps + torch.abs(mov_fft))
-        mov_fft *= torch.from_numpy(img)
+        mov_fft *= img
         mov_fft = torch.real(torch_ifft2(mov_fft, dim=(-2, -1)))
-        return mov_fft.numpy()
+        return mov_fft.cpu().numpy() if is_numpy else mov_fft
 
 
 @vectorize([complex64(complex64, complex64)], nopython=True, target="parallel")

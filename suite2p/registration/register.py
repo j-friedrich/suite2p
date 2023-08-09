@@ -8,6 +8,7 @@ from warnings import warn
 
 import numpy as np
 from scipy.signal import medfilt, medfilt2d
+import torch
 
 from .. import io, default_ops
 from . import bidiphase as bidi
@@ -90,22 +91,25 @@ def pick_initial_reference(frames: np.ndarray):
         size [Ly x Lx], initial reference image
 
     """
+    if isinstance(frames, np.ndarray):
+        frames = torch.tensor(frames, dtype=torch.float32)
     nimg, Ly, Lx = frames.shape
-    frames = np.reshape(frames, (nimg, -1)).astype("float32")
-    frames = frames - np.reshape(frames.mean(axis=1), (nimg, 1))
-    cc = np.matmul(frames, frames.T)
-    ndiag = np.sqrt(np.diag(cc))
-    cc = cc / np.outer(ndiag, ndiag)
-    CCsort = -np.sort(-cc, axis=1)
-    bestCC = np.mean(CCsort[:, 1:20], axis=1)
-    imax = np.argmax(bestCC)
-    indsort = np.argsort(-cc[imax, :])
-    refImg = np.mean(frames[indsort[0:20], :], axis=0)
-    refImg = np.reshape(refImg, (Ly, Lx))
-    return refImg
+    frames = frames.reshape((nimg, -1))
+    frames = frames - frames.mean(axis=1, dtype=torch.float32).reshape((nimg, 1))
+    cc = frames.mm(frames.T)
+    ndiag = torch.sqrt(torch.diag(cc))
+    cc = cc / torch.outer(ndiag, ndiag)
+    CCsort = -torch.sort(-cc, axis=1).values
+    bestCC = torch.mean(CCsort[:, 1:20], axis=1)
+    imax = torch.argmax(bestCC)
+    indsort = torch.sort(-cc[imax, :]).indices
+    refImg = torch.mean(frames[indsort[0:20], :], axis=0)
+    refImg = refImg.reshape((Ly, Lx))
+    return refImg.cpu().numpy()
 
 
-def compute_reference(frames, ops=default_ops()):
+def compute_reference(frames, ops=default_ops(),
+                      device: str = 'cuda' if torch.cuda.is_available() else 'cpu'):
     """ computes the reference image
 
     picks initial reference then iteratively aligns frames to create reference
@@ -118,6 +122,8 @@ def compute_reference(frames, ops=default_ops()):
 
     frames : 3D array, int16
         size [nimg_init x Ly x Lx], frames to use to create initial reference
+    device: str
+        string specifying the torch.device
 
     Returns
     -------
@@ -134,31 +140,30 @@ def compute_reference(frames, ops=default_ops()):
         refImg = utils.spatial_high_pass(refImg, int(ops["spatial_hp_reg"]))
         frames = utils.spatial_high_pass(frames, int(ops["spatial_hp_reg"]))
 
+    frames = torch.tensor(frames, device=device)
     niter = 8
+    from_numpy = lambda x: torch.from_numpy(x) if device=='cpu' else torch.tensor(x, device=device)
     for iter in range(0, niter):
         # rigid registration
+        maskMul, maskOffset = rigid.compute_masks(
+            refImg=refImg,
+            maskSlope=ops["spatial_taper"] if ops["1Preg"] else 3 * ops["smooth_sigma"])
         ymax, xmax, cmax = rigid.phasecorr(
-            data=rigid.apply_masks(
-                frames,
-                *rigid.compute_masks(
-                    refImg=refImg,
-                    maskSlope=ops["spatial_taper"] if ops["1Preg"] else 3 *
-                    ops["smooth_sigma"],
-                )),
-            cfRefImg=rigid.phasecorr_reference(
+            data=(frames * from_numpy(maskMul) + from_numpy(maskOffset)),
+            cfRefImg=from_numpy(rigid.phasecorr_reference(
                 refImg=refImg,
-                smooth_sigma=ops["smooth_sigma"],
-            ),
+                smooth_sigma=ops["smooth_sigma"])),
             maxregshift=ops["maxregshift"],
             smooth_sigma_time=ops["smooth_sigma_time"],
         )
+
         for frame, dy, dx in zip(frames, ymax, xmax):
             frame[:] = rigid.shift_frame(frame=frame, dy=dy, dx=dx)
 
         nmax = max(2, int(frames.shape[0] * (1. + iter) / (2 * niter)))
         isort = np.argsort(-cmax)[1:nmax]
         # reset reference image
-        refImg = frames[isort].mean(axis=0).astype(np.int16)
+        refImg = frames[isort].mean(axis=0, dtype=torch.float32).cpu().numpy().astype(np.int16)
         # shift reference image to position of mean shifts
         refImg = rigid.shift_frame(frame=refImg, dy=int(np.round(-ymax[isort].mean())),
                                    dx=int(np.round(-xmax[isort].mean())))
@@ -203,7 +208,8 @@ def compute_reference_masks(refImg, ops=default_ops()):
 
 
 def register_frames(refAndMasks, frames, rmin=-np.inf, rmax=np.inf, bidiphase=0,
-                    ops=default_ops(), nZ=1):
+                    ops=default_ops(), nZ=1,
+                    device: str='cuda' if torch.cuda.is_available() else 'cpu'):
     """ register frames to reference image 
     
     Parameters
@@ -217,6 +223,9 @@ def register_frames(refAndMasks, frames, rmin=-np.inf, rmax=np.inf, bidiphase=0,
     rmin : clip frames at rmin
 
     rmax : clip frames at rmax
+
+    device: str
+        string specifying the torch.device
 
 
     Returns
@@ -298,11 +307,12 @@ def register_frames(refAndMasks, frames, rmin=-np.inf, rmax=np.inf, bidiphase=0,
             fsmooth = utils.spatial_high_pass(fsmooth, int(ops["spatial_hp_reg"]))
 
         # rigid registration
+        from_numpy = lambda x: torch.from_numpy(x) if device=='cpu' else torch.tensor(x, device=device)
         ymax, xmax, cmax = rigid.phasecorr(
-            data=rigid.apply_masks(
-                data=np.clip(fsmooth, rmin, rmax) if rmin > -np.inf else fsmooth,
-                maskMul=maskMul, maskOffset=maskOffset),
-            cfRefImg=cfRefImg,
+            data=((torch.clip(torch.tensor(fsmooth, dtype=torch.float32, device=device), rmin, rmax) if
+                  rmin > -np.inf else torch.tensor(fsmooth, dtype=torch.float32, device=device)) *
+                  from_numpy(maskMul) + from_numpy(maskOffset)),
+            cfRefImg=from_numpy(cfRefImg),
             maxregshift=ops["maxregshift"],
             smooth_sigma_time=ops["smooth_sigma_time"],
         )
@@ -318,7 +328,8 @@ def register_frames(refAndMasks, frames, rmin=-np.inf, rmax=np.inf, bidiphase=0,
                     fsm[:] = rigid.shift_frame(frame=fsm, dy=dy, dx=dx)
 
             ymax1, xmax1, cmax1 = nonrigid.phasecorr(
-                data=np.clip(fsmooth, rmin, rmax) if rmin > -np.inf else fsmooth,
+                data=(torch.clip(torch.tensor(fsmooth, device=device), rmin, rmax) if
+                      rmin > -np.inf else torch.tensor(fsmooth, device=device)),
                 maskMul=maskMulNR.squeeze(),
                 maskOffset=maskOffsetNR.squeeze(),
                 cfRefImg=cfRefImgNR.squeeze(),
