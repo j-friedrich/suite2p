@@ -100,15 +100,20 @@ def refine_masks(stats, patches, seeds, diam, Lyc, Lxc):
 
 
 def roi_detect(mproj, diameter=None, cellprob_threshold=0.0, flow_threshold=1.5,
-               pretrained_model=None):
+               pretrained_model=None, save_path=None):
     pretrained_model = "cyto3" if pretrained_model is None else pretrained_model
     if not os.path.exists(pretrained_model):
         model = Cellpose(model_type=pretrained_model)
     else:
         model = CellposeModel(pretrained_model=pretrained_model)
-    masks = model.eval(mproj, channels=[0, 0], diameter=diameter,
-                       cellprob_threshold=cellprob_threshold,
-                       flow_threshold=flow_threshold)[0]
+    masks, flows, styles = model.eval(
+        mproj, channels=[0, 0], diameter=diameter,
+        cellprob_threshold=cellprob_threshold, flow_threshold=flow_threshold)[:3]
+    if save_path is not None:
+        np.savez_compressed(
+            os.path.join(save_path, "cellpose"),
+            flows_in_hsv=flows[0], flows=flows[1], cellprob=flows[2],
+            final_locations=flows[3], masks=masks, styles=styles)
     shape = masks.shape
     _, masks = np.unique(np.int32(masks), return_inverse=True)
     masks = masks.reshape(shape)
@@ -210,7 +215,7 @@ def select_rois(ops: Dict[str, Any], mov: np.ndarray, diameter=None):
     masks, centers, median_diam, mask_diams = roi_detect(
         img, diameter=diameter[1], flow_threshold=ops["flow_threshold"],
         cellprob_threshold=ops["cellprob_threshold"],
-        pretrained_model=ops["pretrained_model"])
+        pretrained_model=ops["pretrained_model"], save_path=ops["save_path"])
     if rescale != 1.0:
         masks = cv2.resize(masks, (Lxc, Lyc), interpolation=cv2.INTER_NEAREST)
         img = cv2.resize(img, (Lxc, Lyc))
