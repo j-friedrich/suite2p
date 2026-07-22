@@ -107,8 +107,7 @@ def roi_detect(mproj, diameter=None, settings=None,
         If True, use "chan2_params" from settings instead of "params".
     save_path : str, optional
         If provided, save Cellpose's raw per-pixel output (flows, cell
-        probability map, final pixel locations, masks, styles) to
-        ``save_path/cellpose.npz``.
+        probability map, masks, styles) to ``save_path/cellpose.npz``.
 
     Returns
     -------
@@ -141,10 +140,14 @@ def roi_detect(mproj, diameter=None, settings=None,
                        flow_threshold=settings.get("flow_threshold", 0.4),
                        **params)[:3]
     if save_path is not None:
+        # Cellpose>=4.0.1's eval() returns only 3 flow arrays per image
+        # (HSV flow image, raw XY flow field, cell probability map) --
+        # the pre-4.0 4th element (final pixel locations) is no longer
+        # part of the public return value.
         np.savez_compressed(
             os.path.join(save_path, "cellpose"),
             flows_in_hsv=flows[0], flows=flows[1], cellprob=flows[2],
-            final_locations=flows[3], masks=masks, styles=styles)
+            masks=masks, styles=styles)
     shape = masks.shape
     _, masks = np.unique(np.int32(masks), return_inverse=True)
     masks = masks.reshape(shape)
