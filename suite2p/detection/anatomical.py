@@ -81,7 +81,8 @@ def mask_centers(masks):
 
 
 def roi_detect(mproj, diameter=None, settings=None,
-               pretrained_model=None, device=torch.device("cuda"), chan2=False):
+               pretrained_model=None, device=torch.device("cuda"), chan2=False,
+               save_path=None):
     """
     Detect ROIs in an image using Cellpose.
 
@@ -104,6 +105,10 @@ def roi_detect(mproj, diameter=None, settings=None,
         Torch device, used for GPU cache cleanup after detection.
     chan2 : bool, optional (default False)
         If True, use "chan2_params" from settings instead of "params".
+    save_path : str, optional
+        If provided, save Cellpose's raw per-pixel output (flows, cell
+        probability map, final pixel locations, masks, styles) to
+        ``save_path/cellpose.npz``.
 
     Returns
     -------
@@ -131,10 +136,15 @@ def roi_detect(mproj, diameter=None, settings=None,
     model = CellposeModel(pretrained_model=pretrained_model, gpu=True if core.use_gpu() else False)
     params = settings["params"] if not chan2 else settings["chan2_params"]
     params = {} if params is None else params
-    masks = model.eval(mproj, diameter=diameter[1],
+    masks, flows, styles = model.eval(mproj, diameter=diameter[1],
                        cellprob_threshold=settings.get("cellprob_threshold", 0.0),
                        flow_threshold=settings.get("flow_threshold", 0.4),
-                       **params)[0]
+                       **params)[:3]
+    if save_path is not None:
+        np.savez_compressed(
+            os.path.join(save_path, "cellpose"),
+            flows_in_hsv=flows[0], flows=flows[1], cellprob=flows[2],
+            final_locations=flows[3], masks=masks, styles=styles)
     shape = masks.shape
     _, masks = np.unique(np.int32(masks), return_inverse=True)
     masks = masks.reshape(shape)
@@ -199,9 +209,10 @@ def masks_to_stats(masks, weights):
     return stats
 
 
-def select_rois(mean_img, max_proj, settings, 
+def select_rois(mean_img, max_proj, settings,
                 diameter=[12., 12.],
-                device=torch.device("cuda")):
+                device=torch.device("cuda"),
+                save_path=None):
     """
     Find ROIs in static images using Cellpose anatomical detection.
 
@@ -222,6 +233,9 @@ def select_rois(mean_img, max_proj, settings,
         Expected cell diameter [dy, dx] in pixels.
     device : torch.device, optional (default torch.device("cuda"))
         Torch device for Cellpose and GPU cache cleanup.
+    save_path : str, optional
+        If provided, forwarded to :func:`roi_detect` to save Cellpose's raw
+        per-pixel output to ``save_path/cellpose.npz``.
 
     Returns
     -------
@@ -254,7 +268,8 @@ def select_rois(mean_img, max_proj, settings,
         img -= gaussian_filter(img, diameter[1] * settings["highpass_spatial"])
 
     masks, centers, median_diam, mask_diams = roi_detect(
-        img, diameter=diameter, settings=settings, device=device)
+        img, diameter=diameter, settings=settings, device=device,
+        save_path=save_path)
     
     stats = masks_to_stats(masks, weights)
     logger.info("Detected %d ROIs, %0.2f sec" % (len(stats), time.time() - t0))

@@ -102,10 +102,11 @@ def bin_movie(f_reg, bin_size, yrange=None, xrange=None, badframes=None, nbins=5
     return mov
 
 def detection_wrapper(f_reg, diameter=[12., 12.], tau=1., fs=30, meanImg_chan2=None,
-                      yrange=None, xrange=None, badframes=None, mov=None, 
-                      preclassify=0., classifier_path=None, 
+                      yrange=None, xrange=None, badframes=None, mov=None,
+                      preclassify=0., classifier_path=None,
                       settings=default_settings()["detection"],
-                      device=torch.device("cuda")):
+                      device=torch.device("cuda"),
+                      save_path=None):
     """
     Run the full ROI detection pipeline on a registered movie.
 
@@ -146,6 +147,10 @@ def detection_wrapper(f_reg, diameter=[12., 12.], tau=1., fs=30, meanImg_chan2=N
         Detection settings dictionary.
     device : torch.device, optional (default torch.device("cuda"))
         Torch device for cellpose-based detection.
+    save_path : str, optional
+        If provided and the "cellpose" algorithm is used, forwarded to
+        :func:`suite2p.detection.anatomical.select_rois` to save Cellpose's
+        raw per-pixel output to ``save_path/cellpose.npz``.
 
     Returns
     -------
@@ -197,7 +202,8 @@ def detection_wrapper(f_reg, diameter=[12., 12.], tau=1., fs=30, meanImg_chan2=N
             logger.info(f">>>> CELLPOSE finding masks in {settings['cellpose_settings']['img']}")
             new_settings, stat = anatomical.select_rois(meanImg, max_proj, settings=settings["cellpose_settings"],
                                           diameter=diameter,
-                                          device=device)
+                                          device=device,
+                                          save_path=save_path)
         else:
             logger.info("Warning: cellpose did not import ", anatomical.cellpose_error)
             logger.info("cannot use anatomical mode, will use functional detection instead")

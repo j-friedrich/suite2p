@@ -153,16 +153,17 @@ def pipeline(save_path, f_reg, f_raw=None, f_reg_chan2=None, f_raw_chan2=None,
             settings["diameter"] = np.array(settings["diameter"])
         if settings["diameter"].size == 1:
             settings["diameter"] = np.array([settings["diameter"], settings["diameter"]])
-        detect_outputs, stat, redcell = detection.detection_wrapper(f_reg, 
+        detect_outputs, stat, redcell = detection.detection_wrapper(f_reg,
                                                                     meanImg_chan2=meanImg_chan2,
                                                     yrange=yrange, xrange=xrange,
                                                     tau=settings["tau"], fs=settings["fs"],
                                                     diameter=settings["diameter"],
-                                                settings=settings["detection"], 
+                                                settings=settings["detection"],
                                                 classifier_path=classfile,
                                                 badframes=bad_frames,
                                                 preclassify=settings["classification"]["preclassify"],
-                                                device=device)
+                                                device=device,
+                                                save_path=save_path)
         np.save(os.path.join(save_path, "stat.npy"), stat)
         np.save(os.path.join(save_path, "detect_outputs.npy"), detect_outputs)
         if redcell is not None:
